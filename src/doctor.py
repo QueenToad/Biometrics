@@ -61,7 +61,48 @@ def check_env_file() -> List[Tuple[str, str]]:
     return out
 
 
-def main() -> int:
+def check_credentials(settings: Settings, provider: str) -> Tuple[str, str]:
+    """Ask the provider whether the id+secret pair alone is valid.
+
+    The client_credentials grant authenticates the client and nothing else, so
+    it separates "these credentials are wrong" from every other reason an
+    authorization-code exchange can fail. A server that refuses the grant type
+    still had to authenticate us first, so unsupported_grant_type is a pass.
+    """
+    import httpx
+
+    cfg = getattr(settings, provider)
+    try:
+        resp = httpx.post(
+            cfg.token_url,
+            data={"grant_type": "client_credentials", "client_id": cfg.client_id,
+                  "client_secret": cfg.client_secret},
+            timeout=20,
+        )
+    except Exception as exc:
+        return WARN, f"{provider}: could not reach {cfg.token_url} ({exc})"
+
+    if resp.status_code < 400:
+        return OK, f"{provider}: credentials accepted by {cfg.token_url}"
+
+    error = ""
+    try:
+        error = resp.json().get("error", "")
+    except ValueError:
+        pass
+
+    if error in ("unsupported_grant_type", "invalid_grant", "invalid_scope",
+                 "unauthorized_client"):
+        return OK, (f"{provider}: credentials accepted (server refused the grant "
+                    f"type itself: {error}) — the id and secret are good")
+    if error == "invalid_client":
+        return BAD, (f"{provider}: the server rejects this id+secret pair.\n"
+                     f"       Regenerate the secret in the provider's dashboard, "
+                     f"or create a fresh app.")
+    return WARN, f"{provider}: unexpected {resp.status_code} — {resp.text[:120]}"
+
+
+def main(online: bool = False) -> int:
     print(f"\n=== .env ({ENV_PATH}) ===")
     problems = 0
     for status, msg in check_env_file():
@@ -124,9 +165,21 @@ def main() -> int:
             else:
                 print(f"{OK} {provider}: connected, renewable")
 
+    if online:
+        print("\n=== credentials checked against the provider ===")
+        for provider in ("whoop", "oura"):
+            status, msg = check_credentials(settings, provider)
+            print(f"{status} {msg}")
+            problems += status == BAD
+    else:
+        print("\n(run with --online to ask each provider whether its "
+              "credentials are valid)")
+
     print(f"\n{problems} problem(s) found." if problems else "\nAll good.")
     return 1 if problems else 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    import sys
+
+    raise SystemExit(main(online="--online" in sys.argv))
