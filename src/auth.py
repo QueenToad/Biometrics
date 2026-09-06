@@ -4,6 +4,7 @@ import json
 import secrets
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from typing import Dict, Optional
 from urllib.parse import parse_qs, urlencode, urlparse
 
 import httpx
@@ -24,7 +25,7 @@ def _save_tokens(tokens: dict) -> None:
     TOKENS_PATH.chmod(0o600)
 
 
-def get_tokens(provider: str) -> dict | None:
+def get_tokens(provider: str) -> Optional[dict]:
     """Load saved tokens for a provider."""
     return _load_tokens().get(provider)
 
@@ -49,7 +50,7 @@ def _capture_auth_code(port: int, expected_state: str) -> str:
     Rejects a callback whose `state` doesn't match the one we sent, which is
     what stops an attacker from feeding us their own authorization code.
     """
-    captured: dict[str, str] = {}
+    captured: Dict[str, str] = {}
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):

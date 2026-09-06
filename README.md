@@ -2,6 +2,8 @@
 
 Whoop & Oura API integration — aggregate biometric data from wearables.
 
+Requires Python 3.9 or newer.
+
 ## Setup
 
 1. Install dependencies:

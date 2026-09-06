@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Optional
 
 from pydantic import BaseModel
 
@@ -14,14 +15,14 @@ class SleepRecord(BaseModel):
     source: str  # "whoop" or "oura"
     date: str
     total_sleep_seconds: int
-    rem_seconds: int | None = None
-    deep_seconds: int | None = None
-    light_seconds: int | None = None
-    awake_seconds: int | None = None
-    efficiency: float | None = None
-    score: int | None = None
-    heart_rate_avg: float | None = None
-    hrv_avg: float | None = None
-    respiratory_rate_avg: float | None = None
-    start_time: datetime | None = None
-    end_time: datetime | None = None
+    rem_seconds: Optional[int] = None
+    deep_seconds: Optional[int] = None
+    light_seconds: Optional[int] = None
+    awake_seconds: Optional[int] = None
+    efficiency: Optional[float] = None
+    score: Optional[int] = None
+    heart_rate_avg: Optional[float] = None
+    hrv_avg: Optional[float] = None
+    respiratory_rate_avg: Optional[float] = None
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None

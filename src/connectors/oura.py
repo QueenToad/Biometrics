@@ -1,6 +1,7 @@
 """Oura Ring API client — https://cloud.ouraring.com/v2/docs"""
 
 from datetime import date, timedelta
+from typing import List, Optional
 
 import httpx
 
@@ -14,10 +15,10 @@ PROVIDER = "oura"
 
 
 class OuraClient:
-    def __init__(self, settings: Settings | None = None):
+    def __init__(self, settings: Optional[Settings] = None):
         self.settings = settings or Settings()
         self.base = self.settings.oura.api_base
-        self._client: httpx.Client | None = None
+        self._client: Optional[httpx.Client] = None
 
     def _get_client(self) -> httpx.Client:
         if self._client:
@@ -49,7 +50,7 @@ class OuraClient:
         resp.raise_for_status()
         return resp.json()
 
-    def get_sleep(self, start: date | None = None, end: date | None = None) -> list[SleepRecord]:
+    def get_sleep(self, start: Optional[date] = None, end: Optional[date] = None) -> List[SleepRecord]:
         start = start or date.today() - timedelta(days=7)
         end = end or date.today()
         data = self._request("GET", "/usercollection/daily_sleep", params={
@@ -85,7 +86,7 @@ class OuraClient:
             ))
         return records
 
-    def get_readiness(self, start: date | None = None, end: date | None = None) -> list[RecoveryRecord]:
+    def get_readiness(self, start: Optional[date] = None, end: Optional[date] = None) -> List[RecoveryRecord]:
         start = start or date.today() - timedelta(days=7)
         end = end or date.today()
         data = self._request("GET", "/usercollection/daily_readiness", params={
@@ -105,7 +106,7 @@ class OuraClient:
             ))
         return records
 
-    def get_activity(self, start: date | None = None, end: date | None = None) -> list[ActivityRecord]:
+    def get_activity(self, start: Optional[date] = None, end: Optional[date] = None) -> List[ActivityRecord]:
         start = start or date.today() - timedelta(days=7)
         end = end or date.today()
         data = self._request("GET", "/usercollection/daily_activity", params={
@@ -124,7 +125,7 @@ class OuraClient:
             ))
         return records
 
-    def get_spo2(self, start: date | None = None, end: date | None = None) -> dict:
+    def get_spo2(self, start: Optional[date] = None, end: Optional[date] = None) -> dict:
         start = start or date.today() - timedelta(days=7)
         end = end or date.today()
         return self._request("GET", "/usercollection/daily_spo2", params={

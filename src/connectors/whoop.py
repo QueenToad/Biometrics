@@ -1,6 +1,7 @@
 """Whoop API client — https://developer.whoop.com/api"""
 
 from datetime import date, timedelta
+from typing import List, Optional
 
 import httpx
 
@@ -14,10 +15,10 @@ PROVIDER = "whoop"
 
 
 class WhoopClient:
-    def __init__(self, settings: Settings | None = None):
+    def __init__(self, settings: Optional[Settings] = None):
         self.settings = settings or Settings()
         self.base = self.settings.whoop.api_base
-        self._client: httpx.Client | None = None
+        self._client: Optional[httpx.Client] = None
 
     def _get_client(self) -> httpx.Client:
         if self._client:
@@ -49,7 +50,7 @@ class WhoopClient:
         resp.raise_for_status()
         return resp.json()
 
-    def get_sleep(self, start: date | None = None, end: date | None = None) -> list[SleepRecord]:
+    def get_sleep(self, start: Optional[date] = None, end: Optional[date] = None) -> List[SleepRecord]:
         start = start or date.today() - timedelta(days=7)
         end = end or date.today()
         data = self._request("GET", "/v1/activity/sleep", params={
@@ -74,7 +75,7 @@ class WhoopClient:
             ))
         return records
 
-    def get_recovery(self, start: date | None = None, end: date | None = None) -> list[RecoveryRecord]:
+    def get_recovery(self, start: Optional[date] = None, end: Optional[date] = None) -> List[RecoveryRecord]:
         start = start or date.today() - timedelta(days=7)
         end = end or date.today()
         data = self._request("GET", "/v1/recovery", params={
@@ -95,7 +96,7 @@ class WhoopClient:
             ))
         return records
 
-    def get_workouts(self, start: date | None = None, end: date | None = None) -> list[ActivityRecord]:
+    def get_workouts(self, start: Optional[date] = None, end: Optional[date] = None) -> List[ActivityRecord]:
         start = start or date.today() - timedelta(days=7)
         end = end or date.today()
         data = self._request("GET", "/v1/activity/workout", params={

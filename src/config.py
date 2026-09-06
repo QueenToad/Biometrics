@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Optional
 
 from dotenv import load_dotenv
 from pydantic import Field
@@ -12,7 +13,7 @@ TOKENS_PATH = Path(__file__).parent.parent / "tokens.json"
 class WhoopConfig(BaseSettings):
     client_id: str = Field(alias="WHOOP_CLIENT_ID")
     client_secret: str = Field(alias="WHOOP_CLIENT_SECRET")
-    redirect_uri: str | None = Field(default=None, alias="WHOOP_REDIRECT_URI")
+    redirect_uri: Optional[str] = Field(default=None, alias="WHOOP_REDIRECT_URI")
     auth_url: str = "https://api.prod.whoop.com/oauth/oauth2/auth"
     token_url: str = "https://api.prod.whoop.com/oauth/oauth2/token"
     api_base: str = "https://api.prod.whoop.com/developer"
@@ -22,7 +23,7 @@ class WhoopConfig(BaseSettings):
 class OuraConfig(BaseSettings):
     client_id: str = Field(alias="OURA_CLIENT_ID")
     client_secret: str = Field(alias="OURA_CLIENT_SECRET")
-    redirect_uri: str | None = Field(default=None, alias="OURA_REDIRECT_URI")
+    redirect_uri: Optional[str] = Field(default=None, alias="OURA_REDIRECT_URI")
     auth_url: str = "https://cloud.ouraring.com/oauth/authorize"
     token_url: str = "https://api.ouraring.com/oauth/token"
     api_base: str = "https://api.ouraring.com/v2"
@@ -31,7 +32,7 @@ class OuraConfig(BaseSettings):
 
 class Settings(BaseSettings):
     oauth_redirect_port: int = Field(default=8080, alias="OAUTH_REDIRECT_PORT")
-    oauth_redirect_uri: str | None = Field(default=None, alias="OAUTH_REDIRECT_URI")
+    oauth_redirect_uri: Optional[str] = Field(default=None, alias="OAUTH_REDIRECT_URI")
     whoop: WhoopConfig = Field(default_factory=WhoopConfig)
     oura: OuraConfig = Field(default_factory=OuraConfig)
 
