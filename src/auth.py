@@ -96,14 +96,33 @@ def _capture_auth_code(port: int, expected_state: str) -> str:
     return captured["code"]
 
 
+def _post_token(cfg, form: dict) -> httpx.Response:
+    """POST to a token endpoint, trying both ways of presenting the client.
+
+    RFC 6749 allows the client credentials either in the form body or as HTTP
+    Basic, and servers differ on which they accept — one that wants Basic
+    answers a body-only request with 401 invalid_client, naming neither value.
+    Try the body first, then Basic.
+    """
+    body = dict(form, client_id=cfg.client_id, client_secret=cfg.client_secret)
+    resp = httpx.post(cfg.token_url, data=body)
+    if resp.status_code in (400, 401):
+        basic = httpx.post(
+            cfg.token_url,
+            data=dict(form, client_id=cfg.client_id),
+            auth=(cfg.client_id, cfg.client_secret),
+        )
+        if basic.status_code < 400:
+            return basic
+    return resp
+
+
 def _exchange_code(provider: str, code: str, redirect_uri: str, settings: Settings) -> dict:
     cfg = getattr(settings, provider)
-    resp = httpx.post(cfg.token_url, data={
+    resp = _post_token(cfg, {
         "grant_type": "authorization_code",
         "code": code,
         "redirect_uri": redirect_uri,
-        "client_id": cfg.client_id,
-        "client_secret": cfg.client_secret,
     })
     if resp.status_code >= 400:
         # The body names the cause (bad secret, redirect_uri mismatch, reused
@@ -159,14 +178,16 @@ def refresh_token(provider: str, refresh_tok: str, settings: Settings) -> dict:
         raise ValueError(f"Unknown provider: {provider}")
 
     cfg = getattr(settings, provider)
-    resp = httpx.post(cfg.token_url, data={
+    resp = _post_token(cfg, {
         "grant_type": "refresh_token",
         "refresh_token": refresh_tok,
-        "client_id": cfg.client_id,
-        "client_secret": cfg.client_secret,
         "scope": "offline",
     })
-    resp.raise_for_status()
+    if resp.status_code >= 400:
+        raise RuntimeError(
+            f"{provider} token refresh failed — {resp.status_code}: {resp.text}\n"
+            f"Re-authorize once: python -m src.auth {provider}"
+        )
     return resp.json()
 
 
