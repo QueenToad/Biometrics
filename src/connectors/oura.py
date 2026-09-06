@@ -73,45 +73,77 @@ class OuraClient:
                 return rows
             params["next_token"] = next_token
 
+    # Oura labels each sleep period. Only long_sleep is the main night; the
+    # rest are naps and must not stand in for it.
+    NIGHT_TYPES = ("long_sleep",)
+    NAP_TYPES = ("late_nap", "rest")
+
+    def _sleep_periods(self, start: Optional[date], end: Optional[date]) -> List[dict]:
+        return [p for p in self._collect("/usercollection/sleep", start, end)
+                if p.get("type") != "deleted"]
+
+    @classmethod
+    def _is_nap(cls, period: dict) -> bool:
+        kind = period.get("type")
+        if kind in cls.NIGHT_TYPES:
+            return False
+        if kind in cls.NAP_TYPES:
+            return True
+        # An unlabelled short period is a nap, not a night.
+        return (period.get("total_sleep_duration") or 0) < 3 * 3600
+
     def get_sleep(self, start: Optional[date] = None, end: Optional[date] = None) -> List[SleepRecord]:
-        daily = self._collect("/usercollection/daily_sleep", start, end)
-        details_by_day = {
-            s["day"]: s for s in self._collect("/usercollection/sleep", start, end)
-        }
+        scores = {d["day"]: d.get("score")
+                  for d in self._collect("/usercollection/daily_sleep", start, end)}
 
         records = []
-        for item in daily:
-            day = item.get("day", "")
-            detail = details_by_day.get(day, {})
+        for period in self._sleep_periods(start, end):
+            day = period.get("day", "")
+            is_nap = self._is_nap(period)
             records.append(SleepRecord(
                 source=PROVIDER,
                 date=day,
-                total_sleep_seconds=detail.get("total_sleep_duration") or item.get("contributors", {}).get("total_sleep", 0),
-                rem_seconds=detail.get("rem_sleep_duration"),
-                deep_seconds=detail.get("deep_sleep_duration"),
-                light_seconds=detail.get("light_sleep_duration"),
-                awake_seconds=detail.get("awake_time"),
-                efficiency=detail.get("efficiency"),
-                score=item.get("score"),
-                heart_rate_avg=detail.get("average_heart_rate"),
-                hrv_avg=detail.get("average_hrv"),
-                respiratory_rate_avg=detail.get("average_breath"),
-                start_time=detail.get("bedtime_start"),
-                end_time=detail.get("bedtime_end"),
+                total_sleep_seconds=period.get("total_sleep_duration") or 0,
+                rem_seconds=period.get("rem_sleep_duration"),
+                deep_seconds=period.get("deep_sleep_duration"),
+                light_seconds=period.get("light_sleep_duration"),
+                awake_seconds=period.get("awake_time"),
+                efficiency=period.get("efficiency"),
+                # The daily score grades the night, so it doesn't apply to a nap.
+                score=None if is_nap else scores.get(day),
+                heart_rate_avg=period.get("average_heart_rate"),
+                hrv_avg=period.get("average_hrv"),
+                respiratory_rate_avg=period.get("average_breath"),
+                start_time=period.get("bedtime_start"),
+                end_time=period.get("bedtime_end"),
+                is_nap=is_nap,
             ))
         return records
 
     def get_readiness(self, start: Optional[date] = None, end: Optional[date] = None) -> List[RecoveryRecord]:
+        """Readiness score, with HRV and resting heart rate from that night.
+
+        daily_readiness.contributors holds each factor's contribution to the
+        score on a 0-100 scale, not the measurement itself — reading
+        contributors.resting_heart_rate as a pulse gives values like 9 bpm.
+        The physiological numbers live on the sleep period.
+        """
+        nights = {}
+        for period in self._sleep_periods(start, end):
+            if not self._is_nap(period):
+                nights[period.get("day", "")] = period
+
         records = []
         for item in self._collect("/usercollection/daily_readiness", start, end):
-            contributors = item.get("contributors", {})
+            day = item.get("day", "")
+            night = nights.get(day, {})
             records.append(RecoveryRecord(
                 source=PROVIDER,
-                date=item.get("day", ""),
+                date=day,
                 score=item.get("score"),
-                hrv_ms=contributors.get("hrv_balance"),
-                resting_hr=contributors.get("resting_heart_rate"),
-                skin_temp_celsius=contributors.get("body_temperature"),
+                hrv_ms=night.get("average_hrv"),
+                resting_hr=night.get("lowest_heart_rate"),
+                skin_temp_celsius=item.get("temperature_deviation"),
             ))
         return records
 

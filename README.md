@@ -65,6 +65,9 @@ rather than duplicating it.
   offset it sends alongside. Bedtime in UTC would be off by hours.
 - **Sleep hours exclude time awake in bed.** Whoop's in-bed total counts awake
   and no-data spans; those are subtracted.
+- **Oura's readiness contributors are not measurements.** Each is that
+  factor's contribution to the score on a 0-100 scale; HRV and resting heart
+  rate are read from the night's sleep period instead.
 - **Naps are separated from nights.** A nap sets the `Дневной сон` checkbox
   instead of overwriting the night's numbers.
 - **Unscored nights stay empty.** Whoop leaves a score null while a night is
