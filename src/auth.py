@@ -1,10 +1,12 @@
 """OAuth2 authorization flows for Whoop and Oura."""
 
+import base64
+import hashlib
 import json
 import secrets
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, urlencode, urlparse
 
 import httpx
@@ -96,6 +98,18 @@ def _capture_auth_code(port: int, expected_state: str) -> str:
     return captured["code"]
 
 
+def _pkce_pair() -> Tuple[str, str]:
+    """Return (verifier, challenge) for PKCE S256.
+
+    Servers that don't ask for PKCE ignore the extra parameters, so sending
+    them costs nothing and satisfies the ones that require it.
+    """
+    verifier = secrets.token_urlsafe(64)[:128]
+    digest = hashlib.sha256(verifier.encode("ascii")).digest()
+    challenge = base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+    return verifier, challenge
+
+
 def _post_token(cfg, form: dict) -> httpx.Response:
     """POST to a token endpoint, trying both ways of presenting the client.
 
@@ -104,26 +118,44 @@ def _post_token(cfg, form: dict) -> httpx.Response:
     answers a body-only request with 401 invalid_client, naming neither value.
     Try the body first, then Basic.
     """
-    body = dict(form, client_id=cfg.client_id, client_secret=cfg.client_secret)
-    resp = httpx.post(cfg.token_url, data=body)
-    if resp.status_code in (400, 401):
-        basic = httpx.post(
+    attempts = [
+        # client_secret_post
+        lambda: httpx.post(
+            cfg.token_url,
+            data=dict(form, client_id=cfg.client_id, client_secret=cfg.client_secret),
+        ),
+        # client_secret_basic
+        lambda: httpx.post(
             cfg.token_url,
             data=dict(form, client_id=cfg.client_id),
             auth=(cfg.client_id, cfg.client_secret),
-        )
-        if basic.status_code < 400:
-            return basic
+        ),
+        # public client: no secret at all. An app registered as public rejects
+        # a secret it was never issued, also as invalid_client.
+        lambda: httpx.post(cfg.token_url, data=dict(form, client_id=cfg.client_id)),
+    ]
+
+    resp = None
+    for attempt in attempts:
+        resp = attempt()
+        if resp.status_code < 400:
+            return resp
+        if resp.status_code not in (400, 401):
+            return resp  # a real error, not an authentication-style rejection
     return resp
 
 
-def _exchange_code(provider: str, code: str, redirect_uri: str, settings: Settings) -> dict:
+def _exchange_code(provider: str, code: str, redirect_uri: str, settings: Settings,
+                   verifier: Optional[str] = None) -> dict:
     cfg = getattr(settings, provider)
-    resp = _post_token(cfg, {
+    form = {
         "grant_type": "authorization_code",
         "code": code,
         "redirect_uri": redirect_uri,
-    })
+    }
+    if verifier:
+        form["code_verifier"] = verifier
+    resp = _post_token(cfg, form)
     if resp.status_code >= 400:
         # The body names the cause (bad secret, redirect_uri mismatch, reused
         # code); raise_for_status would throw it away and leave just a number.
@@ -155,6 +187,7 @@ def authorize(provider: str, settings: Settings) -> dict:
 
     redirect_uri = settings.redirect_uri_for(provider)
     state = secrets.token_urlsafe(16)
+    verifier, challenge = _pkce_pair()
 
     auth_url = f"{cfg.auth_url}?" + urlencode({
         "client_id": cfg.client_id,
@@ -162,6 +195,8 @@ def authorize(provider: str, settings: Settings) -> dict:
         "response_type": "code",
         "scope": cfg.scopes,
         "state": state,
+        "code_challenge": challenge,
+        "code_challenge_method": "S256",
     })
 
     print(f"\nOpening {provider} authorization in your browser:\n{auth_url}\n")
@@ -169,7 +204,7 @@ def authorize(provider: str, settings: Settings) -> dict:
 
     port = _callback_port(redirect_uri, settings.oauth_redirect_port)
     code = _capture_auth_code(port, state)
-    return _exchange_code(provider, code, redirect_uri, settings)
+    return _exchange_code(provider, code, redirect_uri, settings, verifier)
 
 
 def refresh_token(provider: str, refresh_tok: str, settings: Settings) -> dict:
