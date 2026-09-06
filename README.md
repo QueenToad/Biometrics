@@ -82,3 +82,13 @@ scripts/
 ├── sync.sh              # what the scheduled job runs
 └── install-schedule.sh  # registers it with launchd
 ```
+
+## Something not working?
+
+```bash
+python -m src.doctor
+```
+
+Reports whether `.env` parses, what each credential looks like (length and
+first/last characters — never the value), and whether each provider has a
+renewable token.
