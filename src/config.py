@@ -30,11 +30,17 @@ class OuraConfig(BaseSettings):
     scopes: str = "daily heartrate personal workout tag session spo2"
 
 
+class NotionConfig(BaseSettings):
+    token: Optional[str] = Field(default=None, alias="NOTION_TOKEN")
+    database_id: Optional[str] = Field(default=None, alias="NOTION_DATABASE_ID")
+
+
 class Settings(BaseSettings):
     oauth_redirect_port: int = Field(default=8080, alias="OAUTH_REDIRECT_PORT")
     oauth_redirect_uri: Optional[str] = Field(default=None, alias="OAUTH_REDIRECT_URI")
     whoop: WhoopConfig = Field(default_factory=WhoopConfig)
     oura: OuraConfig = Field(default_factory=OuraConfig)
+    notion: NotionConfig = Field(default_factory=NotionConfig)
 
     @property
     def redirect_uri(self) -> str:

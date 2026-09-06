@@ -24,5 +24,7 @@ class SleepRecord(BaseModel):
     heart_rate_avg: Optional[float] = None
     hrv_avg: Optional[float] = None
     respiratory_rate_avg: Optional[float] = None
+    # Local wall-clock times, not UTC — bedtime only means anything locally.
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
+    is_nap: bool = False

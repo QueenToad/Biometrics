@@ -1,25 +1,33 @@
-"""CLI entry point — fetch and display biometric data from connected devices."""
+"""CLI — fetch biometric data, show it, and sync it into Notion."""
 
 import json
 from datetime import date, timedelta
+from typing import List
 
+from .aggregate import build_daily
 from .auth import get_tokens
 from .connectors.oura import OuraClient
 from .connectors.whoop import WhoopClient
+from .models.activity import ActivityRecord
+from .models.daily import DailyRecord
+from .models.recovery import RecoveryRecord
+from .models.sleep import SleepRecord
 
 
 def fetch_all(days: int = 7):
     start = date.today() - timedelta(days=days)
     end = date.today()
-    results = {"sleep": [], "recovery": [], "activity": []}
+    sleep: List[SleepRecord] = []
+    recovery: List[RecoveryRecord] = []
+    activity: List[ActivityRecord] = []
 
     if get_tokens("whoop"):
         print("Fetching Whoop data...")
         whoop = WhoopClient()
         try:
-            results["sleep"].extend([r.model_dump(mode="json") for r in whoop.get_sleep(start, end)])
-            results["recovery"].extend([r.model_dump(mode="json") for r in whoop.get_recovery(start, end)])
-            results["activity"].extend([r.model_dump(mode="json") for r in whoop.get_workouts(start, end)])
+            sleep += whoop.get_sleep(start, end)
+            recovery += whoop.get_recovery(start, end)
+            activity += whoop.get_workouts(start, end)
         finally:
             whoop.close()
     else:
@@ -29,48 +37,67 @@ def fetch_all(days: int = 7):
         print("Fetching Oura data...")
         oura = OuraClient()
         try:
-            results["sleep"].extend([r.model_dump(mode="json") for r in oura.get_sleep(start, end)])
-            results["recovery"].extend([r.model_dump(mode="json") for r in oura.get_readiness(start, end)])
-            results["activity"].extend([r.model_dump(mode="json") for r in oura.get_activity(start, end)])
+            sleep += oura.get_sleep(start, end)
+            recovery += oura.get_readiness(start, end)
+            activity += oura.get_activity(start, end)
         finally:
             oura.close()
     else:
         print("Oura: not connected (run python -m src.auth)")
 
-    return results
+    return sleep, recovery, activity
+
+
+def print_daily(rows: List[DailyRecord]) -> None:
+    if not rows:
+        print("\nNo data for this range.")
+        return
+    header = f"{'День':<12}{'Отбой':>7}{'Подъём':>8}{'Сон':>7}{'Score':>7}{'Recov':>7}{'HRV':>7}{'RHR':>6}  Тренировки"
+    print("\n" + header)
+    print("-" * len(header))
+    for r in rows:
+        nap = " 💤" if r.had_nap else ""
+        print(
+            f"{r.day:<12}"
+            f"{r.bedtime or '—':>7}"
+            f"{r.wake_time or '—':>8}"
+            f"{(str(r.sleep_hours) + 'ч') if r.sleep_hours else '—':>7}"
+            f"{r.sleep_score if r.sleep_score is not None else '—':>7}"
+            f"{r.recovery_score if r.recovery_score is not None else '—':>7}"
+            f"{r.hrv_ms if r.hrv_ms is not None else '—':>7}"
+            f"{int(r.resting_hr) if r.resting_hr is not None else '—':>6}"
+            f"  {r.workouts or ''}{nap}"
+        )
+
+
+def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Whoop & Oura biometrics")
+    parser.add_argument("--days", type=int, default=7, help="days to fetch (default: 7)")
+    parser.add_argument("--json", action="store_true", help="print raw JSON")
+    parser.add_argument("--sync", action="store_true", help="write the days into Notion")
+    args = parser.parse_args()
+
+    sleep, recovery, activity = fetch_all(args.days)
+    rows = build_daily(sleep, recovery, activity)
+
+    if args.json:
+        print(json.dumps([r.model_dump(mode="json") for r in rows], indent=2, ensure_ascii=False))
+    else:
+        print_daily(rows)
+
+    if args.sync:
+        from .connectors.notion import NotionClient
+
+        print("\nSyncing to Notion...")
+        notion = NotionClient()
+        try:
+            counts = notion.upsert_all(rows)
+        finally:
+            notion.close()
+        print(f"Notion: {counts['created']} created, {counts['updated']} updated")
 
 
 if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Fetch biometric data from Whoop & Oura")
-    parser.add_argument("--days", type=int, default=7, help="Number of days to fetch (default: 7)")
-    parser.add_argument("--json", action="store_true", help="Output as JSON")
-    args = parser.parse_args()
-
-    data = fetch_all(args.days)
-
-    if args.json:
-        print(json.dumps(data, indent=2, default=str))
-    else:
-        for category, records in data.items():
-            print(f"\n{'='*40}")
-            print(f" {category.upper()} ({len(records)} records)")
-            print(f"{'='*40}")
-            for r in records:
-                src = r["source"]
-                dt = r["date"]
-                if category == "sleep":
-                    hrs = r["total_sleep_seconds"] / 3600
-                    score = r.get("score") or "—"
-                    print(f"  [{src}] {dt}  {hrs:.1f}h sleep  score: {score}")
-                elif category == "recovery":
-                    score = r.get("score") or "—"
-                    hrv = r.get("hrv_ms") or "—"
-                    rhr = r.get("resting_hr") or "—"
-                    print(f"  [{src}] {dt}  score: {score}  HRV: {hrv}  RHR: {rhr}")
-                elif category == "activity":
-                    atype = r.get("activity_type") or "—"
-                    cal = r.get("calories")
-                    cal_str = f"{cal:.0f} cal" if cal else "—"
-                    print(f"  [{src}] {dt}  {atype}  {cal_str}")
+    main()

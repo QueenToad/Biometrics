@@ -31,6 +31,29 @@ def _parse_ts(value: Optional[str]) -> Optional[datetime]:
         return None
 
 
+def _offset(value: Optional[str]) -> Optional[timezone]:
+    """Turn Whoop's '+02:00' / '-05:00' timezone_offset into a tzinfo."""
+    if not value or len(value) < 6 or value[0] not in "+-":
+        return None
+    try:
+        delta = timedelta(hours=int(value[1:3]), minutes=int(value[4:6]))
+    except ValueError:
+        return None
+    return timezone(-delta if value[0] == "-" else delta)
+
+
+def _local(ts: Optional[str], tz_offset: Optional[str]) -> Optional[datetime]:
+    """Parse a UTC timestamp and shift it into the member's local zone.
+
+    Whoop reports instants in UTC with the local offset alongside. Bedtime is
+    only meaningful locally — reported in UTC, a 00:35 bedtime in Madrid reads
+    as 22:35 the previous day.
+    """
+    moment = _parse_ts(ts)
+    tz = _offset(tz_offset)
+    return moment.astimezone(tz) if moment and tz else moment
+
+
 def _day(value: Optional[str]) -> str:
     return value[:10] if value else ""
 
@@ -110,9 +133,15 @@ class WhoopClient:
             # in_bed includes time awake; actual sleep is what's left over.
             asleep = (in_bed - awake - no_data) if in_bed is not None else None
 
+            tz_offset = item.get("timezone_offset")
+            began = _local(item.get("start"), tz_offset)
+            ended = _local(item.get("end"), tz_offset)
+
             records.append(SleepRecord(
                 source=PROVIDER,
-                date=_day(item.get("start")),
+                # Keyed on the local day you woke up, so a night lines up with
+                # the recovery Whoop scores that same morning.
+                date=(ended or began).date().isoformat() if (ended or began) else "",
                 total_sleep_seconds=_seconds(asleep) or 0,
                 rem_seconds=_seconds(stages.get("total_rem_sleep_time_milli")),
                 deep_seconds=_seconds(stages.get("total_slow_wave_sleep_time_milli")),
@@ -121,8 +150,9 @@ class WhoopClient:
                 efficiency=score.get("sleep_efficiency_percentage"),
                 score=score.get("sleep_performance_percentage"),
                 respiratory_rate_avg=score.get("respiratory_rate"),
-                start_time=_parse_ts(item.get("start")),
-                end_time=_parse_ts(item.get("end")),
+                start_time=began,
+                end_time=ended,
+                is_nap=bool(item.get("nap")),
             ))
         return records
 
