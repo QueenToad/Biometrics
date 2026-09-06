@@ -58,7 +58,8 @@ class OuraConfig(BaseSettings):
 
 class NotionConfig(BaseSettings):
     token: Optional[str] = Field(default=None, alias="NOTION_TOKEN")
-    database_id: Optional[str] = Field(default=None, alias="NOTION_DATABASE_ID")
+    # Days are written as child pages under this page, one page per day.
+    parent_page_id: Optional[str] = Field(default=None, alias="NOTION_PARENT_PAGE_ID")
 
 
 class Settings(BaseSettings):

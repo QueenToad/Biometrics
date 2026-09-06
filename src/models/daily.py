@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 class DailyRecord(BaseModel):
     day: str  # YYYY-MM-DD, the day you woke up
+    source: str  # "whoop" or "oura" — one row per device per day
     bedtime: Optional[str] = None  # local HH:MM
     wake_time: Optional[str] = None  # local HH:MM
     sleep_hours: Optional[float] = None
@@ -19,4 +20,3 @@ class DailyRecord(BaseModel):
     had_nap: bool = False
     activity_calories: Optional[int] = None
     workouts: Optional[str] = None
-    sources: Optional[str] = None

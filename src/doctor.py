@@ -147,7 +147,7 @@ def main(online: bool = False) -> int:
     notion = settings.notion
     print("  notion")
     print(f"    token         : {_mask(notion.token)}")
-    print(f"    database_id   : {notion.database_id or 'not set'}")
+    print(f"    parent_page   : {notion.parent_page_id or 'not set'}")
 
     print(f"\n=== tokens ({TOKENS_PATH}) ===")
     if not TOKENS_PATH.exists():
