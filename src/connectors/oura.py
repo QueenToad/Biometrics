@@ -50,22 +50,33 @@ class OuraClient:
         resp.raise_for_status()
         return resp.json()
 
-    def get_sleep(self, start: Optional[date] = None, end: Optional[date] = None) -> List[SleepRecord]:
+    def _collect(self, path: str, start: Optional[date], end: Optional[date]) -> List[dict]:
+        """Fetch every page of a usercollection endpoint.
+
+        Oura returns a next_token whenever the range exceeds one page; without
+        following it we would silently drop the older days of the range.
+        """
         start = start or date.today() - timedelta(days=7)
         end = end or date.today()
-        data = self._request("GET", "/usercollection/daily_sleep", params={
-            "start_date": start.isoformat(),
-            "end_date": end.isoformat(),
-        })
+        params = {"start_date": start.isoformat(), "end_date": end.isoformat()}
 
-        sleep_details = self._request("GET", "/usercollection/sleep", params={
-            "start_date": start.isoformat(),
-            "end_date": end.isoformat(),
-        })
-        details_by_day = {s["day"]: s for s in sleep_details.get("data", [])}
+        rows: List[dict] = []
+        while True:
+            page = self._request("GET", path, params=params)
+            rows.extend(page.get("data", []))
+            next_token = page.get("next_token")
+            if not next_token:
+                return rows
+            params["next_token"] = next_token
+
+    def get_sleep(self, start: Optional[date] = None, end: Optional[date] = None) -> List[SleepRecord]:
+        daily = self._collect("/usercollection/daily_sleep", start, end)
+        details_by_day = {
+            s["day"]: s for s in self._collect("/usercollection/sleep", start, end)
+        }
 
         records = []
-        for item in data.get("data", []):
+        for item in daily:
             day = item.get("day", "")
             detail = details_by_day.get(day, {})
             records.append(SleepRecord(
@@ -87,14 +98,8 @@ class OuraClient:
         return records
 
     def get_readiness(self, start: Optional[date] = None, end: Optional[date] = None) -> List[RecoveryRecord]:
-        start = start or date.today() - timedelta(days=7)
-        end = end or date.today()
-        data = self._request("GET", "/usercollection/daily_readiness", params={
-            "start_date": start.isoformat(),
-            "end_date": end.isoformat(),
-        })
         records = []
-        for item in data.get("data", []):
+        for item in self._collect("/usercollection/daily_readiness", start, end):
             contributors = item.get("contributors", {})
             records.append(RecoveryRecord(
                 source=PROVIDER,
@@ -107,14 +112,8 @@ class OuraClient:
         return records
 
     def get_activity(self, start: Optional[date] = None, end: Optional[date] = None) -> List[ActivityRecord]:
-        start = start or date.today() - timedelta(days=7)
-        end = end or date.today()
-        data = self._request("GET", "/usercollection/daily_activity", params={
-            "start_date": start.isoformat(),
-            "end_date": end.isoformat(),
-        })
         records = []
-        for item in data.get("data", []):
+        for item in self._collect("/usercollection/daily_activity", start, end):
             records.append(ActivityRecord(
                 source=PROVIDER,
                 date=item.get("day", ""),

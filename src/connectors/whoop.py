@@ -1,6 +1,9 @@
-"""Whoop API client — https://developer.whoop.com/api"""
+"""Whoop API v2 client — https://developer.whoop.com/api
 
-from datetime import date, timedelta
+v1 was sunset; all collection endpoints live under /v2 and page via next_token.
+"""
+
+from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional
 
 import httpx
@@ -12,6 +15,28 @@ from ..models.recovery import RecoveryRecord
 from ..models.sleep import SleepRecord
 
 PROVIDER = "whoop"
+
+
+def _parse_ts(value: Optional[str]) -> Optional[datetime]:
+    """Parse an ISO-8601 timestamp, tolerating the trailing 'Z'.
+
+    datetime.fromisoformat only learned to accept 'Z' in 3.11, and this runs
+    on 3.9 too.
+    """
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _day(value: Optional[str]) -> str:
+    return value[:10] if value else ""
+
+
+def _seconds(millis: Optional[int]) -> Optional[int]:
+    return millis // 1000 if millis is not None else None
 
 
 class WhoopClient:
@@ -50,45 +75,65 @@ class WhoopClient:
         resp.raise_for_status()
         return resp.json()
 
-    def get_sleep(self, start: Optional[date] = None, end: Optional[date] = None) -> List[SleepRecord]:
+    def _collect(self, path: str, start: Optional[date], end: Optional[date]) -> List[dict]:
+        """Fetch every page of a collection endpoint.
+
+        Whoop caps each response at 25 records, so a week of workouts can span
+        several pages; without following next_token we would silently truncate.
+        """
         start = start or date.today() - timedelta(days=7)
         end = end or date.today()
-        data = self._request("GET", "/v1/activity/sleep", params={
-            "start": start.isoformat(),
-            "end": end.isoformat(),
-        })
+        params = {
+            "start": _iso_utc(start),
+            "end": _iso_utc(end, end_of_day=True),
+            "limit": 25,
+        }
+
+        records: List[dict] = []
+        while True:
+            page = self._request("GET", path, params=params)
+            records.extend(page.get("records", []))
+            next_token = page.get("next_token")
+            if not next_token:
+                return records
+            params["nextToken"] = next_token
+
+    def get_sleep(self, start: Optional[date] = None, end: Optional[date] = None) -> List[SleepRecord]:
         records = []
-        for item in data.get("records", []):
-            score = item.get("score", {})
+        for item in self._collect("/v2/activity/sleep", start, end):
+            score = item.get("score") or {}
+            stages = score.get("stage_summary") or {}
+
+            in_bed = stages.get("total_in_bed_time_milli")
+            awake = stages.get("total_awake_time_milli") or 0
+            no_data = stages.get("total_no_data_time_milli") or 0
+            # in_bed includes time awake; actual sleep is what's left over.
+            asleep = (in_bed - awake - no_data) if in_bed is not None else None
+
             records.append(SleepRecord(
                 source=PROVIDER,
-                date=item.get("during", {}).get("lower", "")[:10],
-                total_sleep_seconds=score.get("stage_summary", {}).get("total_in_bed_time_milli", 0) // 1000,
-                rem_seconds=score.get("stage_summary", {}).get("total_rem_sleep_time_milli", 0) // 1000,
-                deep_seconds=score.get("stage_summary", {}).get("total_slow_wave_sleep_time_milli", 0) // 1000,
-                light_seconds=score.get("stage_summary", {}).get("total_light_sleep_time_milli", 0) // 1000,
-                awake_seconds=score.get("stage_summary", {}).get("total_awake_time_milli", 0) // 1000,
+                date=_day(item.get("start")),
+                total_sleep_seconds=_seconds(asleep) or 0,
+                rem_seconds=_seconds(stages.get("total_rem_sleep_time_milli")),
+                deep_seconds=_seconds(stages.get("total_slow_wave_sleep_time_milli")),
+                light_seconds=_seconds(stages.get("total_light_sleep_time_milli")),
+                awake_seconds=_seconds(stages.get("total_awake_time_milli")),
                 efficiency=score.get("sleep_efficiency_percentage"),
                 score=score.get("sleep_performance_percentage"),
-                heart_rate_avg=score.get("respiratory_rate"),
                 respiratory_rate_avg=score.get("respiratory_rate"),
+                start_time=_parse_ts(item.get("start")),
+                end_time=_parse_ts(item.get("end")),
             ))
         return records
 
     def get_recovery(self, start: Optional[date] = None, end: Optional[date] = None) -> List[RecoveryRecord]:
-        start = start or date.today() - timedelta(days=7)
-        end = end or date.today()
-        data = self._request("GET", "/v1/recovery", params={
-            "start": start.isoformat(),
-            "end": end.isoformat(),
-        })
         records = []
-        for item in data.get("records", []):
-            score = item.get("score", {})
+        for item in self._collect("/v2/recovery", start, end):
+            score = item.get("score") or {}
             records.append(RecoveryRecord(
                 source=PROVIDER,
-                date=item.get("created_at", "")[:10],
-                score=int(score.get("recovery_score", 0)),
+                date=_day(item.get("created_at")),
+                score=score.get("recovery_score"),
                 hrv_ms=score.get("hrv_rmssd_milli"),
                 resting_hr=score.get("resting_heart_rate"),
                 spo2=score.get("spo2_percentage"),
@@ -97,24 +142,25 @@ class WhoopClient:
         return records
 
     def get_workouts(self, start: Optional[date] = None, end: Optional[date] = None) -> List[ActivityRecord]:
-        start = start or date.today() - timedelta(days=7)
-        end = end or date.today()
-        data = self._request("GET", "/v1/activity/workout", params={
-            "start": start.isoformat(),
-            "end": end.isoformat(),
-        })
         records = []
-        for item in data.get("records", []):
-            score = item.get("score", {})
+        for item in self._collect("/v2/activity/workout", start, end):
+            score = item.get("score") or {}
+            began, ended = _parse_ts(item.get("start")), _parse_ts(item.get("end"))
+            kilojoule = score.get("kilojoule")
+
             records.append(ActivityRecord(
                 source=PROVIDER,
-                date=item.get("during", {}).get("lower", "")[:10],
-                activity_type=item.get("sport_id", {}).get("name"),
-                duration_seconds=score.get("end", 0) - score.get("start", 0) if score.get("end") else None,
-                calories=score.get("kilojoule", 0) * 0.239006 if score.get("kilojoule") else None,
+                date=_day(item.get("start")),
+                # v2 renamed sport_id to sport_name; accept either.
+                activity_type=item.get("sport_name") or item.get("sport_id"),
+                start_time=began,
+                end_time=ended,
+                duration_seconds=int((ended - began).total_seconds()) if began and ended else None,
+                calories=kilojoule * 0.239006 if kilojoule is not None else None,
                 avg_hr=score.get("average_heart_rate"),
                 max_hr=score.get("max_heart_rate"),
                 strain=score.get("strain"),
+                distance_meters=score.get("distance_meter"),
             ))
         return records
 
@@ -122,3 +168,13 @@ class WhoopClient:
         if self._client:
             self._client.close()
             self._client = None
+
+
+def _iso_utc(day: date, end_of_day: bool = False) -> str:
+    """Render a date as the UTC instant Whoop's start/end params expect."""
+    moment = datetime.combine(
+        day,
+        datetime.max.time() if end_of_day else datetime.min.time(),
+        tzinfo=timezone.utc,
+    )
+    return moment.isoformat().replace("+00:00", "Z")
