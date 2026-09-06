@@ -40,12 +40,16 @@ class OuraClient:
         resp = client.request(method, path, **kwargs)
 
         if resp.status_code == 401:
-            tokens = get_tokens(PROVIDER)
-            if tokens and "refresh_token" in tokens:
-                new_tokens = refresh_token(PROVIDER, tokens["refresh_token"], self.settings)
-                save_provider_tokens(PROVIDER, new_tokens)
-                client.headers["Authorization"] = f"Bearer {new_tokens['access_token']}"
-                resp = client.request(method, path, **kwargs)
+            tokens = get_tokens(PROVIDER) or {}
+            if not tokens.get("refresh_token"):
+                raise RuntimeError(
+                    "Oura access token expired and there is no refresh token to renew it.\n"
+                    "Re-authorize once: python -m src.auth oura"
+                )
+            new_tokens = refresh_token(PROVIDER, tokens["refresh_token"], self.settings)
+            save_provider_tokens(PROVIDER, new_tokens)
+            client.headers["Authorization"] = f"Bearer {new_tokens['access_token']}"
+            resp = client.request(method, path, **kwargs)
 
         resp.raise_for_status()
         return resp.json()

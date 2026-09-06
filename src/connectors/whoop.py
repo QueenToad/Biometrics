@@ -88,12 +88,18 @@ class WhoopClient:
         resp = client.request(method, path, **kwargs)
 
         if resp.status_code == 401:
-            tokens = get_tokens(PROVIDER)
-            if tokens and "refresh_token" in tokens:
-                new_tokens = refresh_token(PROVIDER, tokens["refresh_token"], self.settings)
-                save_provider_tokens(PROVIDER, new_tokens)
-                client.headers["Authorization"] = f"Bearer {new_tokens['access_token']}"
-                resp = client.request(method, path, **kwargs)
+            tokens = get_tokens(PROVIDER) or {}
+            if not tokens.get("refresh_token"):
+                # Tokens saved before the 'offline' scope was requested carry no
+                # refresh token, so there is nothing to renew — say that plainly.
+                raise RuntimeError(
+                    "Whoop access token expired and there is no refresh token to renew it.\n"
+                    "Re-authorize once: python -m src.auth whoop"
+                )
+            new_tokens = refresh_token(PROVIDER, tokens["refresh_token"], self.settings)
+            save_provider_tokens(PROVIDER, new_tokens)
+            client.headers["Authorization"] = f"Bearer {new_tokens['access_token']}"
+            resp = client.request(method, path, **kwargs)
 
         resp.raise_for_status()
         return resp.json()

@@ -4,7 +4,7 @@ import json
 import secrets
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 from urllib.parse import parse_qs, urlencode, urlparse
 
 import httpx
@@ -165,15 +165,36 @@ def refresh_token(provider: str, refresh_tok: str, settings: Settings) -> dict:
     return resp.json()
 
 
+CHOICES = {
+    "1": ["whoop"], "whoop": ["whoop"],
+    "2": ["oura"], "oura": ["oura"],
+    "3": ["whoop", "oura"], "both": ["whoop", "oura"],
+}
+
+
+def _pick(argv: List[str]) -> List[str]:
+    """Read the provider from argv, falling back to a prompt.
+
+    Taking it as an argument means pasting a block of commands can't feed the
+    next line into the prompt by accident.
+    """
+    if argv:
+        chosen = CHOICES.get(argv[0].strip().lower())
+        if not chosen:
+            raise SystemExit(f"Unknown provider {argv[0]!r}. Use: whoop, oura, or both.")
+        return chosen
+    return CHOICES.get(input("Connect: [1] Whoop  [2] Oura  [3] Both: ").strip().lower(), [])
+
+
 if __name__ == "__main__":
+    import sys
+
     settings = Settings()
     print("=== Biometrics OAuth Setup ===\n")
 
-    choice = input("Connect: [1] Whoop  [2] Oura  [3] Both: ").strip()
-    selected = {"1": ["whoop"], "2": ["oura"], "3": ["whoop", "oura"]}.get(choice)
-
+    selected = _pick(sys.argv[1:])
     if not selected:
-        raise SystemExit("Pick 1, 2 or 3.")
+        raise SystemExit("Pick 1, 2 or 3 — or run: python -m src.auth oura")
 
     for provider in selected:
         print(f"\nRedirect URI for {provider}: {settings.redirect_uri_for(provider)}")

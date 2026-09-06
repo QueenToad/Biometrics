@@ -17,7 +17,10 @@ class WhoopConfig(BaseSettings):
     auth_url: str = "https://api.prod.whoop.com/oauth/oauth2/auth"
     token_url: str = "https://api.prod.whoop.com/oauth/oauth2/token"
     api_base: str = "https://api.prod.whoop.com/developer"
-    scopes: str = "read:recovery read:sleep read:workout read:profile read:body_measurement"
+    # 'offline' is what makes Whoop return a refresh token. Without it the
+    # access token simply expires after an hour and every call 401s until you
+    # authorize by hand again.
+    scopes: str = "offline read:recovery read:sleep read:workout read:profile read:body_measurement"
 
 
 class OuraConfig(BaseSettings):
