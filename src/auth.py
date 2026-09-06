@@ -115,6 +115,20 @@ def authorize(provider: str, settings: Settings) -> dict:
         raise ValueError(f"Unknown provider: {provider}")
 
     cfg = getattr(settings, provider)
+    missing = [
+        name for name, value in (
+            (f"{provider.upper()}_CLIENT_ID", cfg.client_id),
+            (f"{provider.upper()}_CLIENT_SECRET", cfg.client_secret),
+        )
+        if not (value or "").strip()
+    ]
+    if missing:
+        # Without this the provider just answers 400 invalid_request in the
+        # browser, which says nothing about the empty .env line behind it.
+        raise RuntimeError(
+            f"{', '.join(missing)} is empty in .env — fill it in before authorizing."
+        )
+
     redirect_uri = settings.redirect_uri_for(provider)
     state = secrets.token_urlsafe(16)
 
