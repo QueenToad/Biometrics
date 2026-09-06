@@ -105,7 +105,12 @@ def _exchange_code(provider: str, code: str, redirect_uri: str, settings: Settin
         "client_id": cfg.client_id,
         "client_secret": cfg.client_secret,
     })
-    resp.raise_for_status()
+    if resp.status_code >= 400:
+        # The body names the cause (bad secret, redirect_uri mismatch, reused
+        # code); raise_for_status would throw it away and leave just a number.
+        raise RuntimeError(
+            f"{provider} token exchange failed — {resp.status_code}: {resp.text}"
+        )
     return resp.json()
 
 
@@ -196,11 +201,26 @@ if __name__ == "__main__":
     if not selected:
         raise SystemExit("Pick 1, 2 or 3 — or run: python -m src.auth oura")
 
+    failed = []
     for provider in selected:
         print(f"\nRedirect URI for {provider}: {settings.redirect_uri_for(provider)}")
         print("(this must match the one registered with the provider exactly)")
-        tokens = authorize(provider, settings)
-        save_provider_tokens(provider, tokens)
-        print(f"{provider} connected.")
+        try:
+            tokens = authorize(provider, settings)
+        except Exception as exc:  # keep going: one provider failing shouldn't
+            failed.append(provider)  # cost you the other one's authorization
+            print(f"\n!! {provider} FAILED: {exc}\n")
+            continue
 
-    print(f"\nDone. Tokens saved to {TOKENS_PATH}")
+        if not tokens.get("access_token"):
+            failed.append(provider)
+            print(f"\n!! {provider} returned no access token: {tokens}\n")
+            continue
+
+        save_provider_tokens(provider, tokens)
+        renewable = "yes" if tokens.get("refresh_token") else "NO — it will expire in an hour"
+        print(f"{provider} connected. Refresh token: {renewable}")
+
+    print(f"\nTokens saved to {TOKENS_PATH}")
+    if failed:
+        raise SystemExit(f"Not connected: {', '.join(failed)}")
