@@ -10,6 +10,8 @@ import httpx
 
 from .config import TOKENS_PATH, Settings
 
+PROVIDERS = ("whoop", "oura")
+
 
 def _load_tokens() -> dict:
     if TOKENS_PATH.exists():
@@ -19,123 +21,12 @@ def _load_tokens() -> dict:
 
 def _save_tokens(tokens: dict) -> None:
     TOKENS_PATH.write_text(json.dumps(tokens, indent=2))
-
-
-def _capture_auth_code(port: int) -> str | None:
-    """Start a temporary HTTP server to capture the OAuth callback."""
-    captured = {}
-
-    class Handler(BaseHTTPRequestHandler):
-        def do_GET(self):
-            qs = parse_qs(urlparse(self.path).query)
-            if "code" in qs:
-                captured["code"] = qs["code"][0]
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html")
-                self.end_headers()
-                self.wfile.write(b"<h2>Authorization successful! You can close this tab.</h2>")
-            else:
-                self.send_response(400)
-                self.end_headers()
-                self.wfile.write(b"No authorization code received.")
-
-        def log_message(self, *args):
-            pass
-
-    server = HTTPServer(("localhost", port), Handler)
-    server.timeout = 120
-    server.handle_request()
-    server.server_close()
-    return captured.get("code")
-
-
-def authorize_whoop(settings: Settings) -> dict:
-    """Run OAuth2 flow for Whoop and return tokens."""
-    cfg = settings.whoop
-    state = secrets.token_urlsafe(16)
-
-    auth_params = urlencode({
-        "client_id": cfg.client_id,
-        "redirect_uri": settings.redirect_uri,
-        "response_type": "code",
-        "scope": cfg.scopes,
-        "state": state,
-    })
-    auth_url = f"{cfg.auth_url}?{auth_params}"
-
-    print(f"\nOpening Whoop authorization in browser...\n{auth_url}\n")
-    webbrowser.open(auth_url)
-
-    code = _capture_auth_code(settings.oauth_redirect_port)
-    if not code:
-        raise RuntimeError("Failed to capture Whoop authorization code")
-
-    resp = httpx.post(cfg.token_url, data={
-        "grant_type": "authorization_code",
-        "code": code,
-        "redirect_uri": settings.redirect_uri,
-        "client_id": cfg.client_id,
-        "client_secret": cfg.client_secret,
-    })
-    resp.raise_for_status()
-    return resp.json()
-
-
-def authorize_oura(settings: Settings) -> dict:
-    """Run OAuth2 flow for Oura and return tokens."""
-    cfg = settings.oura
-    state = secrets.token_urlsafe(16)
-
-    auth_params = urlencode({
-        "client_id": cfg.client_id,
-        "redirect_uri": settings.redirect_uri,
-        "response_type": "code",
-        "scope": cfg.scopes,
-        "state": state,
-    })
-    auth_url = f"{cfg.auth_url}?{auth_params}"
-
-    print(f"\nOpening Oura authorization in browser...\n{auth_url}\n")
-    webbrowser.open(auth_url)
-
-    code = _capture_auth_code(settings.oauth_redirect_port)
-    if not code:
-        raise RuntimeError("Failed to capture Oura authorization code")
-
-    resp = httpx.post(cfg.token_url, data={
-        "grant_type": "authorization_code",
-        "code": code,
-        "redirect_uri": settings.redirect_uri,
-        "client_id": cfg.client_id,
-        "client_secret": cfg.client_secret,
-    })
-    resp.raise_for_status()
-    return resp.json()
-
-
-def refresh_token(provider: str, refresh_tok: str, settings: Settings) -> dict:
-    """Refresh an expired access token."""
-    if provider == "whoop":
-        cfg = settings.whoop
-    elif provider == "oura":
-        cfg = settings.oura
-    else:
-        raise ValueError(f"Unknown provider: {provider}")
-
-    resp = httpx.post(cfg.token_url, data={
-        "grant_type": "refresh_token",
-        "refresh_token": refresh_tok,
-        "client_id": cfg.client_id,
-        "client_secret": cfg.client_secret,
-    })
-    resp.raise_for_status()
-    return resp.json()
+    TOKENS_PATH.chmod(0o600)
 
 
 def get_tokens(provider: str) -> dict | None:
     """Load saved tokens for a provider."""
-    all_tokens = _load_tokens()
-    return all_tokens.get(provider)
+    return _load_tokens().get(provider)
 
 
 def save_provider_tokens(provider: str, tokens: dict) -> None:
@@ -145,20 +36,135 @@ def save_provider_tokens(provider: str, tokens: dict) -> None:
     _save_tokens(all_tokens)
 
 
+def _callback_port(redirect_uri: str, fallback: int) -> int:
+    parsed = urlparse(redirect_uri)
+    if parsed.port:
+        return parsed.port
+    return 443 if parsed.scheme == "https" else fallback
+
+
+def _capture_auth_code(port: int, expected_state: str) -> str:
+    """Serve the OAuth callback once and return the authorization code.
+
+    Rejects a callback whose `state` doesn't match the one we sent, which is
+    what stops an attacker from feeding us their own authorization code.
+    """
+    captured: dict[str, str] = {}
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            qs = parse_qs(urlparse(self.path).query)
+            code = qs.get("code", [None])[0]
+            state = qs.get("state", [None])[0]
+            error = qs.get("error", [None])[0]
+
+            if error:
+                captured["error"] = f"{error}: {qs.get('error_description', [''])[0]}"
+                body = b"<h2>Authorization failed. Check the terminal.</h2>"
+                status = 400
+            elif not code:
+                captured["error"] = "No authorization code in callback"
+                body = b"<h2>No authorization code received.</h2>"
+                status = 400
+            elif not secrets.compare_digest(state or "", expected_state):
+                captured["error"] = "State mismatch - possible CSRF, aborting"
+                body = b"<h2>State mismatch. Authorization rejected.</h2>"
+                status = 400
+            else:
+                captured["code"] = code
+                body = b"<h2>Authorization successful! You can close this tab.</h2>"
+                status = 200
+
+            self.send_response(status)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("localhost", port), Handler)
+    server.timeout = 120
+    server.handle_request()
+    server.server_close()
+
+    if "error" in captured:
+        raise RuntimeError(captured["error"])
+    if "code" not in captured:
+        raise RuntimeError("Timed out waiting for the OAuth callback")
+    return captured["code"]
+
+
+def _exchange_code(provider: str, code: str, redirect_uri: str, settings: Settings) -> dict:
+    cfg = getattr(settings, provider)
+    resp = httpx.post(cfg.token_url, data={
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": redirect_uri,
+        "client_id": cfg.client_id,
+        "client_secret": cfg.client_secret,
+    })
+    resp.raise_for_status()
+    return resp.json()
+
+
+def authorize(provider: str, settings: Settings) -> dict:
+    """Run the OAuth2 authorization-code flow for a provider and return tokens."""
+    if provider not in PROVIDERS:
+        raise ValueError(f"Unknown provider: {provider}")
+
+    cfg = getattr(settings, provider)
+    redirect_uri = settings.redirect_uri_for(provider)
+    state = secrets.token_urlsafe(16)
+
+    auth_url = f"{cfg.auth_url}?" + urlencode({
+        "client_id": cfg.client_id,
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "scope": cfg.scopes,
+        "state": state,
+    })
+
+    print(f"\nOpening {provider} authorization in your browser:\n{auth_url}\n")
+    webbrowser.open(auth_url)
+
+    port = _callback_port(redirect_uri, settings.oauth_redirect_port)
+    code = _capture_auth_code(port, state)
+    return _exchange_code(provider, code, redirect_uri, settings)
+
+
+def refresh_token(provider: str, refresh_tok: str, settings: Settings) -> dict:
+    """Exchange a refresh token for a fresh access token."""
+    if provider not in PROVIDERS:
+        raise ValueError(f"Unknown provider: {provider}")
+
+    cfg = getattr(settings, provider)
+    resp = httpx.post(cfg.token_url, data={
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_tok,
+        "client_id": cfg.client_id,
+        "client_secret": cfg.client_secret,
+        "scope": "offline",
+    })
+    resp.raise_for_status()
+    return resp.json()
+
+
 if __name__ == "__main__":
     settings = Settings()
     print("=== Biometrics OAuth Setup ===\n")
 
     choice = input("Connect: [1] Whoop  [2] Oura  [3] Both: ").strip()
+    selected = {"1": ["whoop"], "2": ["oura"], "3": ["whoop", "oura"]}.get(choice)
 
-    if choice in ("1", "3"):
-        tokens = authorize_whoop(settings)
-        save_provider_tokens("whoop", tokens)
-        print("Whoop connected!")
+    if not selected:
+        raise SystemExit("Pick 1, 2 or 3.")
 
-    if choice in ("2", "3"):
-        tokens = authorize_oura(settings)
-        save_provider_tokens("oura", tokens)
-        print("Oura connected!")
+    for provider in selected:
+        print(f"\nRedirect URI for {provider}: {settings.redirect_uri_for(provider)}")
+        print("(this must match the one registered with the provider exactly)")
+        tokens = authorize(provider, settings)
+        save_provider_tokens(provider, tokens)
+        print(f"{provider} connected.")
 
-    print("\nDone. Tokens saved to tokens.json")
+    print(f"\nDone. Tokens saved to {TOKENS_PATH}")
