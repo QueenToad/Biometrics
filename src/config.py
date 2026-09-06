@@ -14,9 +14,15 @@ class WhoopConfig(BaseSettings):
     client_id: str = Field(alias="WHOOP_CLIENT_ID")
     client_secret: str = Field(alias="WHOOP_CLIENT_SECRET")
     redirect_uri: Optional[str] = Field(default=None, alias="WHOOP_REDIRECT_URI")
-    auth_url: str = "https://api.prod.whoop.com/oauth/oauth2/auth"
-    token_url: str = "https://api.prod.whoop.com/oauth/oauth2/token"
-    api_base: str = "https://api.prod.whoop.com/developer"
+    auth_url: str = Field(
+        default="https://api.prod.whoop.com/oauth/oauth2/auth", alias="WHOOP_AUTH_URL"
+    )
+    token_url: str = Field(
+        default="https://api.prod.whoop.com/oauth/oauth2/token", alias="WHOOP_TOKEN_URL"
+    )
+    api_base: str = Field(
+        default="https://api.prod.whoop.com/developer", alias="WHOOP_API_BASE"
+    )
     # 'offline' is what makes Whoop return a refresh token. Without it the
     # access token simply expires after an hour and every call 401s until you
     # authorize by hand again.
@@ -27,10 +33,27 @@ class OuraConfig(BaseSettings):
     client_id: str = Field(alias="OURA_CLIENT_ID")
     client_secret: str = Field(alias="OURA_CLIENT_SECRET")
     redirect_uri: Optional[str] = Field(default=None, alias="OURA_REDIRECT_URI")
-    auth_url: str = "https://cloud.ouraring.com/oauth/authorize"
-    token_url: str = "https://api.ouraring.com/oauth/token"
-    api_base: str = "https://api.ouraring.com/v2"
-    scopes: str = "daily heartrate personal workout tag session spo2"
+    # Apps registered in the new developer portal live on this OAuth server;
+    # the old cloud.ouraring.com endpoints reject them as invalid_client.
+    # Values come from the issuer's discovery document:
+    # https://moi.ouraring.com/oauth/v2/ext/oauth-anonymous/.well-known/openid-configuration
+    auth_url: str = Field(
+        default="https://moi.ouraring.com/oauth/v2/ext/oauth-authorize",
+        alias="OURA_AUTH_URL",
+    )
+    token_url: str = Field(
+        default="https://moi.ouraring.com/oauth/v2/ext/oauth-token",
+        alias="OURA_TOKEN_URL",
+    )
+    api_base: str = Field(default="https://api.ouraring.com/v2", alias="OURA_API_BASE")
+    # The new server namespaces its scopes with extapi:.
+    scopes: str = Field(
+        default=(
+            "extapi:daily extapi:heartrate extapi:personal "
+            "extapi:workout extapi:tag extapi:session extapi:spo2"
+        ),
+        alias="OURA_SCOPES",
+    )
 
 
 class NotionConfig(BaseSettings):
